@@ -48,6 +48,10 @@ MODULE_PARM_DESC(delay,
 	"Delay between setting and dropping the signal (ns)");
 module_param_named(delay, send_delay, uint, 0);
 
+static unsigned int failure_iterations = 5;
+MODULE_PARM_DESC(failure_iterations,
+	"Number of iterations the clock source may remain unchanged.");
+module_param(failure_iterations, uint, 0);
 
 #define SAFETY_INTERVAL	3000	/* set the hrtimer earlier for safety (ns) */
 
@@ -75,6 +79,7 @@ static enum hrtimer_restart hrtimer_event(struct hrtimer *timer)
 	struct parport *port;
 	long lim, delta;
 	unsigned long flags;
+	unsigned int i;
 
 	/* We have to disable interrupts here. The idea is to prevent
 	 * other interrupts on the same processor to introduce random
@@ -102,8 +107,21 @@ static enum hrtimer_restart hrtimer_event(struct hrtimer *timer)
 	}
 
 	/* busy loop until the time is right for an assert edge */
+	i = 0;
 	do {
 		getnstimeofday(&ts2);
+		i++;
+
+		/* Check if there are problems with clock source
+		 * and prevent hard lockups.
+		 */
+		if ((i >= failure_iterations
+		     && ts1.tv_sec  == ts2.tv_sec
+		     && ts1.tv_nsec == ts2.tv_nsec) || i == -1) {
+			local_irq_restore(flags);
+			pr_err("Bad clock source. PPS generator won't work.");
+			goto done;
+		}
 	} while (expire_time.tv_sec == ts2.tv_sec && ts2.tv_nsec < lim);
 
 	/* set the signal */
@@ -112,8 +130,21 @@ static enum hrtimer_restart hrtimer_event(struct hrtimer *timer)
 
 	/* busy loop until the time is right for a clear edge */
 	lim = NSEC_PER_SEC - dev->port_write_time;
+	i = 0;
 	do {
 		getnstimeofday(&ts2);
+		i++;
+
+		/* Check if there are problems with clock source
+		 * and prevent hard lockups.
+		 */
+		if ((i >= failure_iterations
+		     && ts1.tv_sec  == ts2.tv_sec
+		     && ts1.tv_nsec == ts2.tv_nsec) || i == -1) {
+			local_irq_restore(flags);
+			pr_err("Bad clock source. PPS generator won't work.");
+			goto done;
+		}
 	} while (expire_time.tv_sec == ts2.tv_sec && ts2.tv_nsec < lim);
 
 	/* unset the signal */
